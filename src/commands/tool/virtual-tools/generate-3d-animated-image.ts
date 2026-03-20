@@ -1,138 +1,62 @@
 import type { StitchToolClient, Stitch } from '@google/stitch-sdk';
-import { downloadText } from '../../../ui/copy-behaviors/clipboard.js';
 import type { VirtualTool } from '../spec.js';
+import sharp from 'sharp';
+// @ts-ignore – no bundled types for gif-encoder-2
+import GIFEncoder from 'gif-encoder-2';
+
+const FRAMES = 20;
+const FRAME_DELAY_MS = 60;   // 60 ms/frame → ~1.2 s loop
+const MAX_WIDTH = 600;
 
 /**
- * Wraps screen HTML with CSS 3D animation: a floating card with perspective
- * rotation on hover, a subtle continuous float, and a shimmer highlight.
+ * Builds an animated GIF that zooms the image gently in and out (float effect).
+ * Uses a sine curve so the animation loops smoothly.
  */
-function wrap3DAnimation(screenId: string, htmlContent: string): string {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>3D Animated – ${screenId}</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+async function buildAnimatedGif(imageBuffer: Buffer): Promise<Buffer> {
+  const meta = await sharp(imageBuffer).metadata();
+  const origW = meta.width!;
+  const origH = meta.height!;
+  const downscale = Math.min(1, MAX_WIDTH / origW);
+  const outW = Math.round(origW * downscale);
+  const outH = Math.round(origH * downscale);
 
-    body {
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: radial-gradient(ellipse at 60% 40%, #1a1a2e 0%, #0d0d1a 100%);
-      font-family: sans-serif;
-      perspective: 1200px;
-    }
+  // Resize once to output dimensions
+  const base = await sharp(imageBuffer).resize(outW, outH).png().toBuffer();
 
-    .scene {
-      perspective: 1200px;
-    }
+  const encoder = new GIFEncoder(outW, outH, 'neuquant', true, FRAMES);
+  encoder.setDelay(FRAME_DELAY_MS);
+  encoder.setRepeat(0); // infinite loop
+  encoder.start();
 
-    .card {
-      position: relative;
-      width: min(90vw, 800px);
-      border-radius: 16px;
-      overflow: hidden;
-      box-shadow:
-        0 25px 60px rgba(0, 0, 0, 0.6),
-        0 0 40px rgba(99, 179, 237, 0.15);
-      transform-style: preserve-3d;
-      animation: float 6s ease-in-out infinite;
-      transition: transform 0.1s ease-out, box-shadow 0.1s ease-out;
-      cursor: pointer;
-    }
+  for (let i = 0; i < FRAMES; i++) {
+    // Sine over [0, 2π] → scale oscillates between 1.0 and 1.06
+    const t = (Math.sin((i / FRAMES) * Math.PI * 2) + 1) / 2; // 0..1
+    const frameScale = 1.0 + 0.06 * t;
+    const fw = Math.round(outW * frameScale);
+    const fh = Math.round(outH * frameScale);
+    const cropLeft = Math.round((fw - outW) / 2);
+    const cropTop = Math.round((fh - outH) / 2);
 
-    .card:hover {
-      box-shadow:
-        0 40px 80px rgba(0, 0, 0, 0.7),
-        0 0 60px rgba(99, 179, 237, 0.3);
-    }
+    // Scale up then crop center back to (outW × outH), add alpha for RGBA
+    const pixels = await sharp(base)
+      .resize(fw, fh)
+      .extract({ left: cropLeft, top: cropTop, width: outW, height: outH })
+      .ensureAlpha()
+      .raw()
+      .toBuffer();
 
-    .card-inner {
-      width: 100%;
-      transform-origin: center center;
-    }
+    encoder.addFrame(pixels);
+  }
 
-    .card-inner iframe {
-      width: 100%;
-      height: min(80vh, 600px);
-      border: none;
-      display: block;
-      border-radius: 16px;
-    }
-
-    /* Shimmer overlay */
-    .card::after {
-      content: '';
-      position: absolute;
-      inset: 0;
-      border-radius: 16px;
-      background: linear-gradient(
-        135deg,
-        rgba(255, 255, 255, 0.08) 0%,
-        transparent 50%,
-        rgba(255, 255, 255, 0.04) 100%
-      );
-      pointer-events: none;
-      animation: shimmer 4s ease-in-out infinite alternate;
-    }
-
-    @keyframes float {
-      0%, 100% { transform: translateY(0px) rotateX(2deg); }
-      25%       { transform: translateY(-12px) rotateX(-1deg) rotateY(1.5deg); }
-      50%       { transform: translateY(-18px) rotateX(0deg) rotateY(-1deg); }
-      75%       { transform: translateY(-8px) rotateX(1deg) rotateY(0.5deg); }
-    }
-
-    @keyframes shimmer {
-      0%   { opacity: 0.6; transform: skewX(-5deg) translateX(-10%); }
-      100% { opacity: 1;   transform: skewX(-5deg) translateX(10%); }
-    }
-  </style>
-</head>
-<body>
-  <div class="scene">
-    <div class="card" id="card">
-      <div class="card-inner">
-        <iframe
-          srcdoc="${htmlContent.replace(/"/g, '&quot;').replace(/`/g, '&#96;')}"
-          sandbox="allow-scripts allow-same-origin"
-          title="${screenId}"
-        ></iframe>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    const card = document.getElementById('card');
-    let animating = false;
-
-    card.addEventListener('mousemove', (e) => {
-      const rect = card.getBoundingClientRect();
-      const cx = rect.left + rect.width / 2;
-      const cy = rect.top + rect.height / 2;
-      const dx = (e.clientX - cx) / (rect.width / 2);
-      const dy = (e.clientY - cy) / (rect.height / 2);
-      card.style.animation = 'none';
-      card.style.transform =
-        'translateY(-12px) rotateX(' + (-dy * 12) + 'deg) rotateY(' + (dx * 12) + 'deg)';
-    });
-
-    card.addEventListener('mouseleave', () => {
-      card.style.transform = '';
-      card.style.animation = 'float 6s ease-in-out infinite';
-    });
-  </script>
-</body>
-</html>`;
+  encoder.finish();
+  return encoder.out.getData();
 }
 
 export const generate3DAnimatedImageTool: VirtualTool = {
   name: 'generate_3d_animated_image',
   description:
-    '(Virtual) Retrieves a screen\'s HTML and returns a self-contained HTML document that presents the design as a 3D animated floating card with perspective rotation and a shimmer effect.',
+    '(Virtual) Retrieves a screen\'s screenshot and returns a looping animated GIF ' +
+    '(base64-encoded) that presents the design with a smooth float/zoom animation.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -151,26 +75,27 @@ export const generate3DAnimatedImageTool: VirtualTool = {
     if (!stitch) throw new Error('generate_3d_animated_image requires a Stitch instance');
     const { projectId, screenId } = args;
 
-    // 1. Get the screen using the SDK
     const screen = await stitch.project(projectId).getScreen(screenId);
 
-    // 2. Fetch HTML content
-    let animatedHtml: string | null = null;
+    let animatedGifBase64: string | null = null;
     try {
-      const htmlUrl = await screen.getHtml();
-      if (htmlUrl) {
-        const htmlContent = await downloadText(htmlUrl);
-        animatedHtml = wrap3DAnimation(screenId, htmlContent);
+      const imageUrl = await screen.getImage();
+      if (imageUrl) {
+        const response = await fetch(imageUrl);
+        const arrayBuffer = await response.arrayBuffer();
+        const imageBuffer = Buffer.from(arrayBuffer);
+        const gifBuffer = await buildAnimatedGif(imageBuffer);
+        animatedGifBase64 = gifBuffer.toString('base64');
       }
     } catch (e) {
-      console.error(`Error generating 3D animated image: ${e}`);
+      console.error(`Error generating animated GIF: ${e}`);
     }
 
-    // 3. Return result
     return {
       screenId: screen.screenId,
       projectId: screen.projectId,
-      animatedHtml,
+      animatedGifBase64,
+      mimeType: 'image/gif',
     };
   },
 };
