@@ -4,12 +4,14 @@ export { getScreenImageTool } from './get-screen-image.js';
 export { buildSiteTool } from './build-site.js';
 export { listToolsTool } from './list-tools.js';
 export { getYoutubeTranscriptTool } from './get-youtube-transcript.js';
+export { searchYoutubeVideosTool } from './search-youtube-videos.js';
 
 import { getScreenCodeTool } from './get-screen-code.js';
 import { getScreenImageTool } from './get-screen-image.js';
 import { buildSiteTool } from './build-site.js';
 import { listToolsTool } from './list-tools.js';
 import { getYoutubeTranscriptTool } from './get-youtube-transcript.js';
+import { searchYoutubeVideosTool } from './search-youtube-videos.js';
 import type { VirtualTool } from '../spec.js';
 
 export const virtualTools: VirtualTool[] = [
@@ -18,4 +20,5 @@ export const virtualTools: VirtualTool[] = [
   buildSiteTool,
   listToolsTool,
   getYoutubeTranscriptTool,
+  searchYoutubeVideosTool,
 ];
